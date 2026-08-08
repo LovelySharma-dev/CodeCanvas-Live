@@ -9,7 +9,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { insforge } from '../../lib/insforge';
-import { generateUUID } from '../../utils/uuid';
+import { generateUUID, isValidUUID } from '../../utils/uuid';
 
 export default function TeamChat({ isOpen, onClose, onNewMessage }) {
   const { user } = useAuth();
@@ -23,34 +23,18 @@ export default function TeamChat({ isOpen, onClose, onNewMessage }) {
   const messagesEndRef = useRef(null);
 
   // Fetch initial chat messages from database
-  useEffect(() => {
-    if (!workspaceId) return;
+  const fetchChatHistory = async () => {
+    if (!workspaceId || !isValidUUID(workspaceId)) return;
+    try {
+      const { data } = await insforge.database
+        .from('workspace_messages')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .order('created_at', { ascending: true });
 
-    const fetchChatHistory = async () => {
-      try {
-        const { data } = await insforge.database
-          .from('workspace_messages')
-          .select('*')
-          .eq('workspace_id', workspaceId)
-          .order('created_at', { ascending: true });
-
-        if (data && data.length > 0) {
-          setMessages(data);
-        } else {
-          setMessages([
-            {
-              id: 'welcome-msg',
-              workspace_id: workspaceId,
-              user_id: 'system',
-              sender_name: 'CodeCanvas Bot',
-              sender_avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=codecanvas-bot',
-              content: '👋 Welcome to the team chat! Share code snippets, discuss architecture, or pair program in real time.',
-              is_code: false,
-              created_at: new Date().toISOString()
-            }
-          ]);
-        }
-      } catch (err) {
+      if (data && data.length > 0) {
+        setMessages(data);
+      } else {
         setMessages([
           {
             id: 'welcome-msg',
@@ -58,16 +42,60 @@ export default function TeamChat({ isOpen, onClose, onNewMessage }) {
             user_id: 'system',
             sender_name: 'CodeCanvas Bot',
             sender_avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=codecanvas-bot',
-            content: '👋 Welcome to the team chat! Share code snippets or pair program in real time.',
+            content: '👋 Welcome to the team chat! Share code snippets, discuss architecture, or pair program in real time.',
             is_code: false,
             created_at: new Date().toISOString()
           }
         ]);
       }
-    };
+    } catch (err) {
+      setMessages([
+        {
+          id: 'welcome-msg',
+          workspace_id: workspaceId,
+          user_id: 'system',
+          sender_name: 'CodeCanvas Bot',
+          sender_avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=codecanvas-bot',
+          content: '👋 Welcome to the team chat! Share code snippets or pair program in real time.',
+          is_code: false,
+          created_at: new Date().toISOString()
+        }
+      ]);
+    }
+  };
 
+  useEffect(() => {
     fetchChatHistory();
   }, [workspaceId]);
+
+  // Database polling fallback every 1.5s so messages arrive across all browsers
+  useEffect(() => {
+    if (!workspaceId || !isValidUUID(workspaceId)) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { data: freshMsgs } = await insforge.database
+          .from('workspace_messages')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: true });
+
+        if (freshMsgs && freshMsgs.length > 0) {
+          setMessages(prev => {
+            if (freshMsgs.length !== prev.length) {
+              if (!isOpen && onNewMessage && freshMsgs.length > prev.length) {
+                onNewMessage();
+              }
+              return freshMsgs;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {}
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [workspaceId, isOpen, onNewMessage]);
 
   // Subscribe to real-time CHAT_MESSAGE broadcast on room channel workspace:${workspaceId}
   useEffect(() => {
@@ -119,10 +147,12 @@ export default function TeamChat({ isOpen, onClose, onNewMessage }) {
     }
 
     // Persist to PostgreSQL database
-    try {
-      await insforge.database.from('workspace_messages').insert([newMsg]);
-    } catch (err) {
-      console.warn('Chat save warning:', err);
+    if (isValidUUID(workspaceId)) {
+      try {
+        await insforge.database.from('workspace_messages').insert([newMsg]);
+      } catch (err) {
+        console.warn('Chat save warning:', err);
+      }
     }
   };
 

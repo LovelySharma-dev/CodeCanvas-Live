@@ -9,20 +9,10 @@ export default function LivePreview() {
   const [activeTab, setActiveTab] = useState('preview'); // 'preview' | 'console'
   const [srcDoc, setSrcDoc] = useState('');
 
-  // Function to resolve HTML with explicitly linked JS and CSS files dynamically
+  // Function to resolve HTML with linked JS and CSS files dynamically
   const buildBundledDoc = (fileList) => {
     if (!fileList || fileList.length === 0) {
-      return `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <style>
-              body { margin: 8px; font-family: sans-serif; background: #ffffff; color: #64748b; }
-            </style>
-          </head>
-          <body>No files in workspace</body>
-        </html>
-      `;
+      return `<!DOCTYPE html><html><body style="font-family:sans-serif;color:#64748b;padding:16px;">No files in workspace</body></html>`;
     }
 
     // Find active HTML file or index.html
@@ -33,24 +23,28 @@ export default function LivePreview() {
       htmlFile = fileList.find(f => f.name === 'index.html' || f.language === 'html') || fileList[0];
     }
 
-    const htmlFileContent = htmlFile ? htmlFile.content : '<div></div>';
-    const cssFile = fileList.find(f => f.name === 'style.css' || f.language === 'css')?.content || '';
+    let htmlContent = htmlFile ? htmlFile.content : '<h1 style="font-family:sans-serif;">CodeCanvas Live Studio</h1>';
+    const cssContent = fileList.find(f => f.name === 'style.css' || f.language === 'css')?.content || '';
 
-    let processedHtml = htmlFileContent;
-
-    // 1. Inject CSS if explicitly linked in HTML
-    if (/<link[^>]*href=["']\/?(?:\.\/)?style\.css["'][^>]*>/i.test(htmlFileContent)) {
-      processedHtml = processedHtml.replace(
+    // Replace linked stylesheet <link rel="stylesheet" href="style.css"> or inject CSS
+    if (/<link[^>]*href=["']\/?(?:\.\/)?style\.css["'][^>]*>/i.test(htmlContent)) {
+      htmlContent = htmlContent.replace(
         /<link[^>]*href=["']\/?(?:\.\/)?style\.css["'][^>]*>/i,
-        `<style>${cssFile}</style>`
+        `<style>\n${cssContent}\n</style>`
       );
-    } else {
-      // Strip unused link tags to prevent 404 network fetches
-      processedHtml = processedHtml.replace(/<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/gi, '');
+    } else if (cssContent && !htmlContent.includes('<style>')) {
+      if (htmlContent.includes('</head>')) {
+        htmlContent = htmlContent.replace('</head>', `<style>\n${cssContent}\n</style></head>`);
+      } else {
+        htmlContent = `<style>\n${cssContent}\n</style>` + htmlContent;
+      }
     }
 
-    // 2. Replace linked JS files (e.g., <script src="script.js"> or <script src="hello.js">)
-    processedHtml = processedHtml.replace(
+    // Strip out unmatched external stylesheet link tags
+    htmlContent = htmlContent.replace(/<link\s+rel=["']stylesheet["']\s+href=["'][^"']+["']\s*\/?>/gi, '');
+
+    // Replace linked JS scripts <script src="script.js"></script>
+    htmlContent = htmlContent.replace(
       /<script[^>]*src=["']\/?(.*?)["'][^>]*><\/script>/gi,
       (match, scriptPath) => {
         const fileName = scriptPath.replace(/^\.?\//, '');
@@ -62,46 +56,40 @@ export default function LivePreview() {
       }
     );
 
-    return `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <style>
-            /* Neutral raw browser canvas reset */
-            body { margin: 8px; font-family: sans-serif; background-color: #ffffff; color: #000000; }
-          </style>
-        </head>
-        <body>
-          ${processedHtml.includes('<body>') ? processedHtml.replace(/<\/?body[^>]*>/gi, '') : processedHtml}
-          <script>
-            // Forward console logs to host editor
-            const _log = console.log;
-            const _error = console.error;
-            const _warn = console.warn;
-            console.log = (...args) => {
-              window.parent.postMessage({ type: 'CONSOLE_LOG', log: args.join(' ') }, '*');
-              _log(...args);
-            };
-            console.error = (...args) => {
-              window.parent.postMessage({ type: 'CONSOLE_ERROR', log: args.join(' ') }, '*');
-              _error(...args);
-            };
-            console.warn = (...args) => {
-              window.parent.postMessage({ type: 'CONSOLE_WARN', log: args.join(' ') }, '*');
-              _warn(...args);
-            };
-            window.onerror = (msg, url, line) => {
-              window.parent.postMessage({ type: 'CONSOLE_ERROR', log: \`Error: \${msg} (line \${line})\` }, '*');
-            };
-          </script>
-        </body>
-      </html>
+    // Forward console logs to editor console panel
+    const consoleBridge = `
+      <script>
+        (function() {
+          const _log = console.log;
+          const _error = console.error;
+          const _warn = console.warn;
+          console.log = function(...args) {
+            try { window.parent.postMessage({ type: 'CONSOLE_LOG', log: args.join(' ') }, '*'); } catch(e){}
+            _log.apply(console, args);
+          };
+          console.error = function(...args) {
+            try { window.parent.postMessage({ type: 'CONSOLE_ERROR', log: args.join(' ') }, '*'); } catch(e){}
+            _error.apply(console, args);
+          };
+          console.warn = function(...args) {
+            try { window.parent.postMessage({ type: 'CONSOLE_WARN', log: args.join(' ') }, '*'); } catch(e){}
+            _warn.apply(console, args);
+          };
+          window.onerror = function(msg, url, line) {
+            try { window.parent.postMessage({ type: 'CONSOLE_ERROR', log: 'Error: ' + msg + ' (line ' + line + ')' }, '*'); } catch(e){}
+          };
+        })();
+      </script>
     `;
+
+    if (htmlContent.includes('</body>')) {
+      return htmlContent.replace('</body>', `${consoleBridge}</body>`);
+    } else {
+      return htmlContent + consoleBridge;
+    }
   };
 
-  // Update srcDoc state immediately when files or activeFile changes or autoRefresh is enabled
+  // Update srcDoc state reactively when files change
   useEffect(() => {
     if (autoRefresh) {
       setSrcDoc(buildBundledDoc(files));

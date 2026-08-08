@@ -11,7 +11,7 @@ export function WorkspaceProvider({ workspaceId, children }) {
   const { user } = useAuth();
   const [workspace, setWorkspace] = useState(null);
   const [members, setMembers] = useState([]);
-  const [userRole, setUserRole] = useState('VIEWER'); // 'OWNER' | 'EDITOR' | 'VIEWER'
+  const [userRole, setUserRole] = useState('EDITOR'); // 'OWNER' | 'EDITOR' | 'VIEWER'
   const [files, setFiles] = useState([]);
   const [activeFileId, setActiveFileId] = useState(null);
   const [openFileIds, setOpenFileIds] = useState([]);
@@ -20,8 +20,9 @@ export function WorkspaceProvider({ workspaceId, children }) {
   const [presenceUsers, setPresenceUsers] = useState([]);
   
   const isSeedingRef = useRef(false);
+  const lastSaveTimeRef = useRef(Date.now());
 
-  // Fetch Workspace details, members, and files with deduplication guard
+  // Fetch Workspace details, members, and files
   const loadWorkspaceData = useCallback(async () => {
     if (!workspaceId || !user) return;
     try {
@@ -84,7 +85,7 @@ export function WorkspaceProvider({ workspaceId, children }) {
         }
       }
 
-      // 2. Fetch workspace files with strict deduplication guard
+      // 2. Fetch workspace files with deduplication guard
       let { data: dbFiles } = await insforge.database
         .from('files')
         .select('*')
@@ -112,7 +113,6 @@ export function WorkspaceProvider({ workspaceId, children }) {
           isSeedingRef.current = false;
         }
       } else {
-        // De-duplicate files by name in frontend state & clean up PostgreSQL duplicate records
         const seenNames = new Set();
         const uniqueFiles = [];
         const duplicateIdsToDelete = [];
@@ -168,6 +168,40 @@ export function WorkspaceProvider({ workspaceId, children }) {
 
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
+  }, [workspaceId]);
+
+  // Database polling fallback every 1.5s for remote cross-browser / cross-device code sync
+  useEffect(() => {
+    if (!workspaceId || !isValidUUID(workspaceId)) return;
+
+    const interval = setInterval(async () => {
+      if (Date.now() - lastSaveTimeRef.current < 1200) return;
+
+      try {
+        const { data: latestFiles } = await insforge.database
+          .from('files')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: true });
+
+        if (latestFiles && latestFiles.length > 0) {
+          setFiles(prev => {
+            let hasChanged = false;
+            const updated = prev.map(oldFile => {
+              const fresh = latestFiles.find(f => f.id === oldFile.id || f.name === oldFile.name);
+              if (fresh && fresh.content !== oldFile.content) {
+                hasChanged = true;
+                return { ...oldFile, content: fresh.content };
+              }
+              return oldFile;
+            });
+            return hasChanged ? updated : prev;
+          });
+        }
+      } catch (err) {}
+    }, 1500);
+
+    return () => clearInterval(interval);
   }, [workspaceId]);
 
   // Setup Realtime WebSocket Channel
@@ -239,12 +273,16 @@ export function WorkspaceProvider({ workspaceId, children }) {
     return newFile;
   };
 
-  const updateFileContent = async (fileId, content) => {
-    if (userRole === 'VIEWER') return;
+  const updateFileContent = async (fileId, content, isRemote = false) => {
+    if (userRole === 'VIEWER' && !isRemote) return;
+    if (!isRemote) {
+      lastSaveTimeRef.current = Date.now();
+    }
+    
     setFiles(prev => prev.map(f => f.id === fileId ? { ...f, content } : f));
 
     // 1. Broadcast over WebSockets / BroadcastChannel
-    if (realtimeChannel) {
+    if (!isRemote && realtimeChannel) {
       realtimeChannel.broadcastFileChange(fileId, content);
     }
 
@@ -253,8 +291,8 @@ export function WorkspaceProvider({ workspaceId, children }) {
       localStorage.setItem(`codecanvas_file_${workspaceId}_${fileId}`, content);
     } catch (e) {}
 
-    // 3. Persist to PostgreSQL database asynchronously
-    if (isValidUUID(fileId) && isValidUUID(workspaceId)) {
+    // 3. Persist to PostgreSQL database asynchronously if local edit
+    if (!isRemote && isValidUUID(fileId) && isValidUUID(workspaceId)) {
       try {
         await insforge.database
           .from('files')
