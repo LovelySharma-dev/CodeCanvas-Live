@@ -200,8 +200,8 @@ npm install
 ### 3. Configure Environment Variables
 Create a `.env` file in the root directory:
 ```env
-VITE_INSFORGE_BASE_URL=https://d7fwbe73.ap-southeast.insforge.app
-VITE_INSFORGE_ANON_KEY=ik_631989c04f450a1cf7ec7997cfdc92ed
+VITE_INSFORGE_BASE_URL=
+VITE_INSFORGE_ANON_KEY=
 ```
 
 ### 4. Run Development Server
