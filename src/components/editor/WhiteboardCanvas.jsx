@@ -29,6 +29,8 @@ export default function WhiteboardCanvas() {
   const [currentPath, setCurrentPath] = useState([]);
   const [textInput, setTextInput] = useState('');
   const [textPos, setTextPos] = useState(null);
+  
+  const lastSyncTsRef = useRef(0);
 
   // Redraw canvas from shapes array
   const redrawCanvas = () => {
@@ -114,14 +116,17 @@ export default function WhiteboardCanvas() {
     redrawCanvas();
   }, [shapes]);
 
-  // Subscribe to real-time WHITEBOARD_DRAW broadcast updates on room workspace:${workspaceId}
+  // Subscribe to real-time WHITEBOARD_DRAW broadcast updates & reactive storage sync
   useEffect(() => {
+    if (!workspaceId) return;
+
     // 1. Storage event listener for multi-window / multi-tab synchronization
     const handleStorage = (e) => {
       if (e.key === `codecanvas_wb_${workspaceId}` && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          if (parsed && parsed.shapes) {
+          if (parsed && parsed.shapes && parsed.ts > lastSyncTsRef.current) {
+            lastSyncTsRef.current = parsed.ts;
             setShapes(parsed.shapes);
           }
         } catch (err) {}
@@ -129,7 +134,7 @@ export default function WhiteboardCanvas() {
     };
     window.addEventListener('storage', handleStorage);
 
-    // Initial load from storage if available
+    // Initial load from storage
     try {
       const saved = localStorage.getItem(`codecanvas_wb_${workspaceId}`);
       if (saved) {
@@ -140,7 +145,21 @@ export default function WhiteboardCanvas() {
       }
     } catch (e) {}
 
-    // 2. Realtime WebSocket Channel listener
+    // 2. Poll heartbeat check every 250ms for low latency cross-window sync
+    const interval = setInterval(() => {
+      try {
+        const saved = localStorage.getItem(`codecanvas_wb_${workspaceId}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.shapes && parsed.ts > lastSyncTsRef.current) {
+            lastSyncTsRef.current = parsed.ts;
+            setShapes(parsed.shapes);
+          }
+        }
+      } catch (e) {}
+    }, 250);
+
+    // 3. Realtime WebSocket Channel listener
     let unsubscribe = () => {};
     if (realtimeChannel) {
       unsubscribe = realtimeChannel.on('WHITEBOARD_DRAW', ({ payload }) => {
@@ -152,11 +171,14 @@ export default function WhiteboardCanvas() {
 
     return () => {
       window.removeEventListener('storage', handleStorage);
+      clearInterval(interval);
       unsubscribe();
     };
   }, [realtimeChannel, workspaceId]);
 
   const broadcastWhiteboardUpdate = (updatedShapes) => {
+    const ts = Date.now();
+    lastSyncTsRef.current = ts;
     setShapes(updatedShapes);
 
     if (realtimeChannel && !realtimeChannel.isClosed) {
@@ -166,7 +188,7 @@ export default function WhiteboardCanvas() {
     try {
       localStorage.setItem(`codecanvas_wb_${workspaceId}`, JSON.stringify({
         shapes: updatedShapes,
-        ts: Date.now()
+        ts
       }));
     } catch (e) {}
   };

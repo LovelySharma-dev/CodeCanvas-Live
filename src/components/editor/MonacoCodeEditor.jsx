@@ -22,6 +22,7 @@ export default function MonacoCodeEditor() {
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
   const cursorListenerRef = useRef(null);
+  const isRemoteEditRef = useRef(false);
 
   const isReadOnly = userRole === 'VIEWER';
 
@@ -49,6 +50,11 @@ export default function MonacoCodeEditor() {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
+    // Set initial value
+    if (activeFile && activeFile.content !== undefined) {
+      editor.setValue(activeFile.content);
+    }
+
     // Dispose any previous listener before attaching a new cursor listener
     cursorListenerRef.current?.dispose();
     cursorListenerRef.current = editor.onDidChangeCursorPosition((e) => {
@@ -61,6 +67,22 @@ export default function MonacoCodeEditor() {
     });
   };
 
+  // Sync Monaco Editor internal model reactively whenever activeFile.content changes from another peer
+  useEffect(() => {
+    if (editorRef.current && activeFile) {
+      const currentEditorValue = editorRef.current.getValue();
+      if (activeFile.content !== undefined && activeFile.content !== currentEditorValue) {
+        isRemoteEditRef.current = true;
+        const position = editorRef.current.getPosition();
+        editorRef.current.setValue(activeFile.content);
+        if (position) {
+          editorRef.current.setPosition(position);
+        }
+        isRemoteEditRef.current = false;
+      }
+    }
+  }, [activeFile?.content, activeFileId]);
+
   // Dispose Monaco cursor listener on unmount
   useEffect(() => {
     return () => {
@@ -69,12 +91,12 @@ export default function MonacoCodeEditor() {
   }, []);
 
   const handleEditorChange = (value) => {
-    if (isReadOnly || !activeFileId) return;
+    if (isReadOnly || !activeFileId || isRemoteEditRef.current) return;
     setSaveState('saving');
     updateFileContent(activeFileId, value || '');
     setTimeout(() => {
       setSaveState('saved');
-    }, 400);
+    }, 300);
   };
 
   return (
@@ -120,12 +142,12 @@ export default function MonacoCodeEditor() {
             {saveState === 'saving' ? (
               <>
                 <Save className="w-3.5 h-3.5 text-brand-sky animate-spin" />
-                <span className="hidden sm:inline text-brand-sky">Saving...</span>
+                <span className="hidden sm:inline text-brand-sky">Syncing...</span>
               </>
             ) : (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-brand-emerald" />
-                <span className="hidden sm:inline text-slate-400">Saved</span>
+                <span className="hidden sm:inline text-slate-400">Live Sync</span>
               </>
             )}
           </div>

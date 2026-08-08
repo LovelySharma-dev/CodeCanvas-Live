@@ -126,7 +126,6 @@ export function WorkspaceProvider({ workspaceId, children }) {
           }
         }
 
-        // Clean up duplicate records in database permanently
         if (duplicateIdsToDelete.length > 0) {
           for (const dupId of duplicateIdsToDelete) {
             try {
@@ -155,6 +154,22 @@ export function WorkspaceProvider({ workspaceId, children }) {
     loadWorkspaceData();
   }, [loadWorkspaceData]);
 
+  // Multi-tab / Multi-window localStorage sync channel for instantaneous code edits
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    const handleStorage = (e) => {
+      if (e.key && e.key.startsWith(`codecanvas_file_${workspaceId}_`)) {
+        const fileId = e.key.replace(`codecanvas_file_${workspaceId}_`, '');
+        const newContent = e.newValue || '';
+        setFiles(prev => prev.map(f => f.id === fileId ? { ...f, content: newContent } : f));
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [workspaceId]);
+
   // Setup Realtime WebSocket Channel
   useEffect(() => {
     if (!workspaceId || !user) return;
@@ -182,7 +197,6 @@ export function WorkspaceProvider({ workspaceId, children }) {
   const createFile = async (name, language = 'javascript', content = '') => {
     if (userRole === 'VIEWER') return;
 
-    // Check if file with same name already exists to prevent duplicate UI entries
     const existing = files.find(f => f.name === name);
     if (existing) {
       setActiveFileId(existing.id);
@@ -229,10 +243,17 @@ export function WorkspaceProvider({ workspaceId, children }) {
     if (userRole === 'VIEWER') return;
     setFiles(prev => prev.map(f => f.id === fileId ? { ...f, content } : f));
 
+    // 1. Broadcast over WebSockets / BroadcastChannel
     if (realtimeChannel) {
       realtimeChannel.broadcastFileChange(fileId, content);
     }
 
+    // 2. Broadcast over LocalStorage event channel
+    try {
+      localStorage.setItem(`codecanvas_file_${workspaceId}_${fileId}`, content);
+    } catch (e) {}
+
+    // 3. Persist to PostgreSQL database asynchronously
     if (isValidUUID(fileId) && isValidUUID(workspaceId)) {
       try {
         await insforge.database
