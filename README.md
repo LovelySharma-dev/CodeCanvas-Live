@@ -30,39 +30,83 @@ Powered by **React 18**, **Monaco Editor**, **Tailwind CSS**, **InsForge BaaS**,
 ## 🏛️ System Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Client ["Frontend Client (React 18 + Vite)"]
-        UI["App Shell (Oceanic Dark Palette)"]
-        Monaco["Monaco Code Editor (Jellyfish Theme)"]
-        LivePrev["Sandboxed Live Preview (Iframe)"]
-        Whiteboard["Interactive Whiteboard Canvas"]
-        Chat["Team Chat & Code Snippet Feed"]
-        Video["WebRTC Audio & Video Call Overlay"]
+flowchart TB
+    %% ==================== STYLING DEFINITIONS ====================
+    classDef clientStyle fill:#0F172A,stroke:#06B6D4,stroke-width:2px,color:#F8FAFC;
+    classDef syncStyle fill:#032B43,stroke:#10B981,stroke-width:2px,color:#F8FAFC;
+    classDef realtimeStyle fill:#1E293B,stroke:#38BDF8,stroke-width:2px,color:#F8FAFC;
+    classDef dbStyle fill:#0F2942,stroke:#0284C7,stroke-width:2px,color:#F8FAFC;
+    classDef p2pStyle fill:#1C1917,stroke:#F43F5E,stroke-width:2px,color:#F8FAFC;
+
+    %% ==================== CLIENT TIER ====================
+    subgraph Client ["🖥️ Frontend Client Tier (React 18 + Vite)"]
+        direction TB
+
+        subgraph Shell ["App Shell & Management"]
+            UI["Dashboard & Workspace Navigation"]
+            FileExplorer["File Tree Explorer (CRUD)"]
+        end
+
+        subgraph Studio ["Workspace Studio Components"]
+            Monaco["Monaco Editor\n(Jellyfish Theme)"]
+            LivePrev["Sandboxed Live Preview\n(Isolated Iframe)"]
+            Whiteboard["Interactive Whiteboard\n(Vector Canvas)"]
+            Chat["Team Chat & Snippets"]
+            VideoUI["WebRTC Video Overlay\n(PiP Grid)"]
+        end
+
+        subgraph LocalSync ["Local CRDT & State Engine"]
+            YjsDoc["Yjs Y.Doc\n(Conflict-Free State)"]
+            Awareness["Yjs Awareness\n(Caret & Presence)"]
+        end
     end
 
-    subgraph Realtime ["Real-Time & Peer Signaling Layer"]
-        WS["InsForge WebSocket Channel (workspace:id)"]
-        RTC["WebRTC 3-Step Handshake (Offer/Answer/ICE)"]
+    %% ==================== REALTIME TIER ====================
+    subgraph Realtime ["⚡ Real-Time Communication & Signaling Layer"]
+        direction LR
+        WS["InsForge WebSocket Engine\n(Pub/Sub: workspace:id)"]
+        Signaling["WebRTC Signaling Channel\n(Offer / Answer / ICE)"]
     end
 
-    subgraph Backend ["InsForge Backend (PostgreSQL BaaS)"]
-        DB[("PostgreSQL Database")]
-        Auth["InsForge Authentication"]
+    subgraph PeerMesh ["🤝 Peer-to-Peer Mesh Network"]
+        PeerA["Peer Client A"] <===>|WebRTC Audio/Video Stream| PeerB["Peer Client B"]
     end
 
-    UI --> Monaco
-    UI --> LivePrev
-    UI --> Whiteboard
-    UI --> Chat
-    UI --> Video
+    %% ==================== BACKEND TIER ====================
+    subgraph Backend ["🗄️ InsForge Backend (PostgreSQL BaaS)"]
+        direction LR
+        DB[("PostgreSQL Database\n(Users, Workspaces, Members, Files, Invites)")]
+        Auth["InsForge Auth Service\n(Email JWT & Social OAuth)"]
+    end
 
-    Monaco <-->|Real-time Editor Sync| WS
-    Whiteboard <-->|Vector Shape Sync| WS
-    Chat <-->|Live Message Broadcast| WS
-    Video <-->|Peer Signaling| RTC
+    %% ==================== CONNECTIONS ====================
+    %% Internal Client Flow
+    Monaco <-->|Text Mutations| YjsDoc
+    Monaco -->|Cursor Position| Awareness
+    Whiteboard <-->|Vector Shape Delta| YjsDoc
+    FileExplorer -->|Select File| Monaco
+    Monaco -->|Combined Source| LivePrev
 
-    Client <-->|SDK REST API| DB
-    Client <-->|OAuth / Email Auth| Auth
+    %% Real-Time Data Sync
+    YjsDoc <-->|CRDT State Vector Sync| WS
+    Awareness <-->|Presence Broadcast| WS
+    Chat <-->|Instant Message Broadcast| WS
+    
+    %% WebRTC Connection Setup
+    VideoUI <-->|Signaling Handshake| Signaling
+    Signaling -.->|Establish P2P Call| PeerMesh
+
+    %% Backend Persistence & Auth
+    UI <-->|Session & JWT Validation| Auth
+    FileExplorer <-->|File CRUD REST API| DB
+    Chat <-->|Message History Logs| DB
+
+    %% Apply Styles
+    class Client,Shell,Studio clientStyle;
+    class LocalSync syncStyle;
+    class Realtime realtimeStyle;
+    class Backend dbStyle;
+    class PeerMesh p2pStyle;
 ```
 
 ---
@@ -195,6 +239,6 @@ npm run preview
 
 <div align="center">
 
-Made with ❤️ by the **CodeCanvas Live Team**
+Made with ❤️ by the **CodeCanvas Live**
 
 </div>
