@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import { 
   Send, 
   X, 
@@ -12,7 +13,9 @@ import { generateUUID } from '../../utils/uuid';
 
 export default function TeamChat({ isOpen, onClose, onNewMessage }) {
   const { user } = useAuth();
-  const { workspaceId, realtimeChannel, presenceUsers } = useWorkspace();
+  const { workspaceId: paramWorkspaceId } = useParams();
+  const { workspaceId: contextWorkspaceId, realtimeChannel, presenceUsers } = useWorkspace();
+  const workspaceId = paramWorkspaceId || contextWorkspaceId;
   
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -92,7 +95,7 @@ export default function TeamChat({ isOpen, onClose, onNewMessage }) {
 
   const handleSendMessage = async (e) => {
     e?.preventDefault();
-    if (!inputMessage.trim() || !user) return;
+    if (!inputMessage.trim() || !user || !workspaceId) return;
 
     const newMsg = {
       id: generateUUID(),

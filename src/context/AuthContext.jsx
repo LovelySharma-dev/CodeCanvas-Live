@@ -13,12 +13,28 @@ export function AuthProvider({ children }) {
     checkUserSession();
   }, []);
 
+  const syncUserRecord = async (authUser) => {
+    if (!authUser || !authUser.id) return;
+    try {
+      await insforge.database.from('users').insert([{
+        id: authUser.id,
+        email: authUser.email,
+        full_name: authUser.user_metadata?.full_name || authUser.full_name || authUser.name || authUser.email.split('@')[0],
+        avatar_url: authUser.user_metadata?.avatar_url || authUser.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${authUser.id}`
+      }]);
+    } catch (err) {
+      // Ignore if user row already exists
+    }
+  };
+
   const checkUserSession = async () => {
     try {
       setLoading(true);
       const savedSession = localStorage.getItem('codecanvas_user_session');
       if (savedSession) {
-        setUser(JSON.parse(savedSession));
+        const parsed = JSON.parse(savedSession);
+        setUser(parsed);
+        await syncUserRecord(parsed);
       }
 
       // Try SDK user fetch if online
@@ -37,27 +53,6 @@ export function AuthProvider({ children }) {
       }
     } finally {
       setLoading(false);
-    }
-  };
-
-  const syncUserRecord = async (authUser) => {
-    try {
-      const { data: existing } = await insforge.database
-        .from('users')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      if (!existing) {
-        await insforge.database.from('users').insert([{
-          id: authUser.id,
-          email: authUser.email,
-          full_name: authUser.user_metadata?.full_name || authUser.name || authUser.email.split('@')[0],
-          avatar_url: authUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${authUser.id}`
-        }]);
-      }
-    } catch (err) {
-      console.warn('Sync user record warning:', err);
     }
   };
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import { 
   Mic, 
   MicOff, 
@@ -23,7 +24,9 @@ const ICE_SERVERS = {
 
 export default function VideoCall({ isOpen, onClose }) {
   const { user } = useAuth();
-  const { workspaceId, realtimeChannel, presenceUsers } = useWorkspace();
+  const { workspaceId: paramWorkspaceId } = useParams();
+  const { workspaceId: contextWorkspaceId, realtimeChannel } = useWorkspace();
+  const workspaceId = paramWorkspaceId || contextWorkspaceId;
 
   const [inCall, setInCall] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -80,17 +83,17 @@ export default function VideoCall({ isOpen, onClose }) {
     return pc;
   };
 
-  // WebRTC Signaling Event Listener
+  // WebRTC Signaling Event Listener over room workspace:${workspaceId}
   useEffect(() => {
-    if (!realtimeChannel || !inCall || !user) return;
+    if (!realtimeChannel || !inCall || !user || !workspaceId) return;
 
     const unsubscribe = realtimeChannel.on('WEBRTC_SIGNAL', async ({ payload, senderId }) => {
       if (!payload || senderId === user.id) return;
 
       const { type, userId, targetId, offer, answer, candidate } = payload;
 
-      // 1. JOIN_ROOM: Initiated by new joining peer
-      if (type === 'JOIN_ROOM') {
+      // 1. USER_JOINED_VIDEO: Initiated by new joining peer
+      if (type === 'USER_JOINED_VIDEO' || type === 'JOIN_ROOM') {
         const pc = createPeerConnection(senderId);
         try {
           const offerOption = await pc.createOffer();
@@ -150,7 +153,7 @@ export default function VideoCall({ isOpen, onClose }) {
     });
 
     return () => unsubscribe();
-  }, [realtimeChannel, inCall, user]);
+  }, [realtimeChannel, inCall, user, workspaceId]);
 
   // Start local media stream on joining call
   const startLocalStream = async () => {
@@ -166,10 +169,10 @@ export default function VideoCall({ isOpen, onClose }) {
       }
       setInCall(true);
 
-      // Broadcast JOIN_ROOM signal over workspace:${workspaceId}
+      // Broadcast USER_JOINED_VIDEO signal over room workspace:${workspaceId}
       if (realtimeChannel && !realtimeChannel.isClosed) {
         realtimeChannel.sendBroadcast('WEBRTC_SIGNAL', {
-          type: 'JOIN_ROOM',
+          type: 'USER_JOINED_VIDEO',
           userId: user?.id
         });
       }
@@ -182,7 +185,7 @@ export default function VideoCall({ isOpen, onClose }) {
         setInCall(true);
         if (realtimeChannel && !realtimeChannel.isClosed) {
           realtimeChannel.sendBroadcast('WEBRTC_SIGNAL', {
-            type: 'JOIN_ROOM',
+            type: 'USER_JOINED_VIDEO',
             userId: user?.id
           });
         }
@@ -273,7 +276,7 @@ export default function VideoCall({ isOpen, onClose }) {
 
   return (
     <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ${
-      isMinimized ? 'w-64 h-14' : 'w-[420px] h-[460px]'
+      isMinimized ? 'w-64 h-14' : 'w-[440px] h-[480px]'
     } bg-canvas-panel/95 backdrop-blur-xl border border-cyan-500/40 rounded-3xl shadow-glass flex flex-col overflow-hidden select-none`}>
       
       {/* Top Header Bar */}
@@ -308,38 +311,56 @@ export default function VideoCall({ isOpen, onClose }) {
         <div className="flex-1 flex flex-col p-3 space-y-3 overflow-hidden">
           
           {/* Main Video Grid */}
-          <div className="flex-1 bg-canvas-bg rounded-2xl border border-canvas-border relative overflow-hidden grid grid-cols-1 gap-2 p-2">
+          <div className="flex-1 bg-canvas-bg rounded-2xl border border-canvas-border relative overflow-hidden grid grid-cols-2 gap-2 p-2 overflow-y-auto">
             {inCall ? (
-              <div className="relative w-full h-full rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className={`w-full h-full object-cover ${isVideoOff && !isScreenSharing ? 'hidden' : 'block'}`}
-                />
+              <>
+                {/* Local Video Frame */}
+                <div className="relative w-full h-full min-h-[160px] rounded-xl overflow-hidden bg-slate-900 border border-cyan-500/40">
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover ${isVideoOff && !isScreenSharing ? 'hidden' : 'block'}`}
+                  />
 
-                {/* Avatar Fallback if camera is OFF */}
-                {isVideoOff && !isScreenSharing && (
-                  <div className="flex flex-col items-center justify-center h-full text-center p-4">
-                    <img
-                      src={user?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.id}`}
-                      alt={user?.full_name}
-                      className="w-16 h-16 rounded-2xl bg-slate-800 ring-4 ring-cyan-500/40 mb-2"
-                    />
-                    <span className="font-bold text-sm text-white">{user?.full_name || user?.email}</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5">Camera Muted</span>
+                  {isVideoOff && !isScreenSharing && (
+                    <div className="flex flex-col items-center justify-center h-full text-center p-2">
+                      <img
+                        src={user?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.id}`}
+                        alt={user?.full_name}
+                        className="w-12 h-12 rounded-xl bg-slate-800 ring-2 ring-cyan-500/40 mb-1"
+                      />
+                      <span className="font-bold text-xs text-white truncate max-w-[100px]">{user?.full_name || 'You'}</span>
+                    </div>
+                  )}
+
+                  <div className="absolute bottom-2 left-2 flex items-center space-x-1 bg-canvas-panel/90 px-2 py-0.5 rounded-full border border-canvas-border text-[10px] text-white backdrop-blur-md">
+                    <Volume2 className="w-3 h-3 text-cyan-400" />
+                    <span className="font-semibold">{user?.full_name || 'You'}</span>
                   </div>
-                )}
-
-                {/* Name Badge */}
-                <div className="absolute bottom-2 left-2 flex items-center space-x-1.5 bg-canvas-panel/90 px-2.5 py-1 rounded-full border border-canvas-border text-[11px] text-white backdrop-blur-md">
-                  <Volume2 className="w-3 h-3 text-cyan-400" />
-                  <span className="font-semibold">{user?.full_name || 'You'} (Host)</span>
                 </div>
-              </div>
+
+                {/* Remote Peers Video Frames */}
+                {remotePeers.map((peer) => (
+                  <div key={peer.id} className="relative w-full h-full min-h-[160px] rounded-xl overflow-hidden bg-slate-900 border border-emerald-500/40">
+                    <video
+                      ref={el => {
+                        if (el && peer.stream) el.srcObject = peer.stream;
+                      }}
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute bottom-2 left-2 flex items-center space-x-1 bg-canvas-panel/90 px-2 py-0.5 rounded-full border border-canvas-border text-[10px] text-white backdrop-blur-md">
+                      <Volume2 className="w-3 h-3 text-emerald-400" />
+                      <span className="font-semibold">Collaborator</span>
+                    </div>
+                  </div>
+                ))}
+              </>
             ) : (
-              <div className="text-center p-6 space-y-3 flex flex-col items-center justify-center h-full">
+              <div className="col-span-2 text-center p-6 space-y-3 flex flex-col items-center justify-center h-full">
                 <Users className="w-10 h-10 text-cyan-400 animate-bounce" />
                 <div>
                   <h4 className="font-bold text-sm text-white">Join WebRTC Video Call</h4>

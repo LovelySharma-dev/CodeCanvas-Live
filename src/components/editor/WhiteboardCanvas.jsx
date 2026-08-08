@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import { 
   Pencil, 
   Square, 
@@ -14,7 +15,9 @@ import { useWorkspace } from '../../context/WorkspaceContext';
 const COLORS = ['#06b6d4', '#38bdf8', '#10b981', '#f59e0b', '#f43f5e', '#ffffff', '#000000'];
 
 export default function WhiteboardCanvas() {
-  const { realtimeChannel } = useWorkspace();
+  const { workspaceId: paramWorkspaceId } = useParams();
+  const { workspaceId: contextWorkspaceId, realtimeChannel } = useWorkspace();
+  const workspaceId = paramWorkspaceId || contextWorkspaceId;
 
   const canvasRef = useRef(null);
   const [tool, setTool] = useState('pencil'); // 'pencil' | 'rect' | 'circle' | 'arrow' | 'text' | 'eraser'

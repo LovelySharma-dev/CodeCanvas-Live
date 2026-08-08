@@ -1,20 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { 
-  Plus, 
+  FolderPlus, 
   Search, 
-  FolderCode, 
+  Users, 
+  Code2, 
+  Sparkles, 
+  Clock, 
+  Plus, 
   Trash2, 
-  Settings, 
-  Clock,
-  Mail,
-  CheckCircle2,
-  XCircle
+  ArrowRight,
+  UserCheck,
+  Check,
+  X
 } from 'lucide-react';
-import Navbar from '../components/common/Navbar';
-import Modal from '../components/common/Modal';
 import { useAuth } from '../context/AuthContext';
 import { insforge } from '../lib/insforge';
+import Modal from '../components/common/Modal';
+import Navbar from '../components/common/Navbar';
 import { generateUUID } from '../utils/uuid';
 
 export default function DashboardPage() {
@@ -25,68 +28,73 @@ export default function DashboardPage() {
   const [userInvites, setUserInvites] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState('ALL'); // 'ALL' | 'OWNED' | 'SHARED'
-
-  // Create Modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [creating, setCreating] = useState(false);
 
+  // Fetch workspaces & pending invitations for current user
   const fetchUserWorkspacesAndInvites = useCallback(async () => {
     if (!user) return;
+
     try {
       setLoading(true);
-      // 1. Fetch workspaces owned by user
-      const { data: ownedWs } = await insforge.database
-        .from('workspaces')
-        .select('*')
-        .eq('owner_id', user.id);
 
-      // 2. Fetch workspaces user is a member of
+      // Ensure user record exists in users table first
+      try {
+        await insforge.database.from('users').insert([{
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name || user.email.split('@')[0],
+          avatar_url: user.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.id}`
+        }]);
+      } catch (e) {}
+
+      // 1. Fetch member records for current user
       const { data: memberRows } = await insforge.database
         .from('workspace_members')
         .select('*')
         .eq('user_id', user.id);
 
-      const memberWsIds = (memberRows || []).map(m => m.workspace_id);
-      let sharedWs = [];
-      if (memberWsIds.length > 0) {
-        const { data: sWs } = await insforge.database
-          .from('workspaces')
-          .select('*')
-          .in('id', memberWsIds);
-        sharedWs = sWs || [];
+      const memberWorkspaceIds = (memberRows || []).map(m => m.workspace_id);
+
+      // 2. Fetch workspaces owned by user OR member of
+      let userWsList = [];
+      const { data: ownedWs } = await insforge.database
+        .from('workspaces')
+        .select('*')
+        .eq('owner_id', user.id);
+
+      if (ownedWs) {
+        userWsList = [...ownedWs.map(w => ({ ...w, role: 'OWNER' }))];
       }
 
-      // Merge and mark role
-      const memberRoleMap = {};
-      (memberRows || []).forEach(m => {
-        memberRoleMap[m.workspace_id] = m.role;
-      });
-
-      const allWsMap = new Map();
-      (ownedWs || []).forEach(w => {
-        allWsMap.set(w.id, { ...w, role: 'OWNER' });
-      });
-
-      sharedWs.forEach(w => {
-        if (!allWsMap.has(w.id)) {
-          allWsMap.set(w.id, { ...w, role: memberRoleMap[w.id] || 'EDITOR' });
-        }
-      });
-
-      setWorkspaces(Array.from(allWsMap.values()));
-
-      // 3. Fetch pending invitations for logged-in user email
-      if (user.email) {
-        const { data: inviteRows } = await insforge.database
-          .from('workspace_invites')
+      if (memberWorkspaceIds.length > 0) {
+        const { data: memberWs } = await insforge.database
+          .from('workspaces')
           .select('*')
-          .eq('email', user.email.toLowerCase().trim())
-          .eq('status', 'PENDING');
+          .in('id', memberWorkspaceIds);
 
-        const pendingInvites = inviteRows || [];
+        if (memberWs) {
+          memberWs.forEach(ws => {
+            if (!userWsList.some(w => w.id === ws.id)) {
+              const memRecord = memberRows.find(m => m.workspace_id === ws.id);
+              userWsList.push({ ...ws, role: memRecord ? memRecord.role : 'EDITOR' });
+            }
+          });
+        }
+      }
+
+      setWorkspaces(userWsList);
+
+      // 3. Fetch pending invitations for user's email
+      const { data: pendingInvites } = await insforge.database
+        .from('workspace_invites')
+        .select('*')
+        .eq('email', user.email.toLowerCase())
+        .eq('status', 'PENDING');
+
+      if (pendingInvites && pendingInvites.length > 0) {
         const wsIdsToFetch = pendingInvites.map(i => i.workspace_id);
 
         let inviteWsMap = {};
@@ -109,6 +117,8 @@ export default function DashboardPage() {
         }));
 
         setUserInvites(formattedInvites);
+      } else {
+        setUserInvites([]);
       }
 
     } catch (err) {
@@ -124,14 +134,25 @@ export default function DashboardPage() {
 
   const handleCreateWorkspace = async (e) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !user) return;
 
     try {
       setCreating(true);
+
+      // Ensure user record exists in users table first
+      try {
+        await insforge.database.from('users').insert([{
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name || user.email.split('@')[0],
+          avatar_url: user.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.id}`
+        }]);
+      } catch (e) {}
+
       const workspaceId = generateUUID();
       let newWs;
 
-      // 1. Insert new workspace into PostgreSQL workspaces table first
+      // 1. Insert new workspace into PostgreSQL workspaces table
       const { data: wsData, error: wsError } = await insforge.database
         .from('workspaces')
         .insert([{
@@ -153,7 +174,7 @@ export default function DashboardPage() {
         newWs = wsData[0];
       }
 
-      // 2. Immediately insert owner into workspace_members
+      // 2. Insert owner into workspace_members if not present
       try {
         await insforge.database.from('workspace_members').insert([{
           id: generateUUID(),
@@ -161,7 +182,7 @@ export default function DashboardPage() {
           user_id: user.id,
           role: 'OWNER'
         }]);
-      } catch(e){}
+      } catch(e) {}
 
       setIsCreateOpen(false);
       setName('');
@@ -176,26 +197,51 @@ export default function DashboardPage() {
   };
 
   const handleAcceptInvite = async (invite) => {
-    try {
-      await insforge.database
-        .from('workspace_members')
-        .insert([{
-          id: generateUUID(),
-          workspace_id: invite.workspace_id,
-          user_id: user.id,
-          role: invite.role
-        }]);
+    if (!user || !invite) return;
 
-      await insforge.database
-        .from('workspace_invites')
-        .update({ status: 'ACCEPTED' })
-        .eq('id', invite.id);
+    try {
+      // 1. Ensure user row exists in users table
+      try {
+        await insforge.database.from('users').insert([{
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name || user.email.split('@')[0],
+          avatar_url: user.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.id}`
+        }]);
+      } catch (e) {}
+
+      // 2. Check if member row already exists
+      const { data: existingMembers } = await insforge.database
+        .from('workspace_members')
+        .select('*')
+        .eq('workspace_id', invite.workspace_id)
+        .eq('user_id', user.id);
+
+      if (!existingMembers || existingMembers.length === 0) {
+        try {
+          await insforge.database
+            .from('workspace_members')
+            .insert([{
+              id: generateUUID(),
+              workspace_id: invite.workspace_id,
+              user_id: user.id,
+              role: invite.role
+            }]);
+        } catch (e) {}
+      }
+
+      // 3. Mark invite accepted
+      try {
+        await insforge.database
+          .from('workspace_invites')
+          .update({ status: 'ACCEPTED' })
+          .eq('id', invite.id);
+      } catch (e) {}
 
       setUserInvites(prev => prev.filter(i => i.id !== invite.id));
       fetchUserWorkspacesAndInvites();
       navigate(`/workspace/${invite.workspace_id}`);
     } catch (err) {
-      console.error('Failed to accept invite:', err);
       navigate(`/workspace/${invite.workspace_id}`);
     }
   };
@@ -213,66 +259,81 @@ export default function DashboardPage() {
     }
   };
 
-  const handleDeleteWorkspace = async (wsId, wsName, e) => {
+  const handleDeleteWorkspace = async (workspaceId, e) => {
     e.stopPropagation();
-    if (!confirm(`Delete workspace "${wsName}"? All data will be permanently lost.`)) return;
+    if (!confirm('Are you sure you want to delete this workspace? This action cannot be undone.')) return;
 
     try {
-      await insforge.database.from('workspaces').delete().eq('id', wsId);
-      setWorkspaces(prev => prev.filter(w => w.id !== wsId));
+      await insforge.database.from('workspaces').delete().eq('id', workspaceId);
+      setWorkspaces(prev => prev.filter(w => w.id !== workspaceId));
     } catch (err) {
-      setWorkspaces(prev => prev.filter(w => w.id !== wsId));
+      console.error('Failed to delete workspace:', err);
     }
   };
 
-  // Filtered list
-  const filteredWorkspaces = workspaces.filter(w => {
-    const matchesSearch = w.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          (w.description && w.description.toLowerCase().includes(searchQuery.toLowerCase()));
-    
-    if (roleFilter === 'OWNED') return matchesSearch && w.role === 'OWNER';
-    if (roleFilter === 'SHARED') return matchesSearch && w.role !== 'OWNER';
-    return matchesSearch;
-  });
+  const filteredWorkspaces = workspaces.filter(w => 
+    w.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    w.description?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
-    <div className="min-h-screen bg-canvas-bg text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-canvas-bg font-sans text-slate-100 flex flex-col">
       <Navbar />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full flex-1">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         
-        {/* Pending Invitations Banner / Section */}
+        {/* Top Action Header */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
+              <span>Developer Workspaces</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold font-mono">
+                {workspaces.length} Total
+              </span>
+            </h1>
+            <p className="text-sm text-slate-400 mt-1">Manage and jump into your pair programming sessions</p>
+          </div>
+
+          <button
+            onClick={() => setIsCreateOpen(true)}
+            className="flex items-center space-x-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-canvas-bg font-extrabold text-sm shadow-glow-cyan transition-all hover:scale-105"
+          >
+            <Plus className="w-4 h-4 font-bold" />
+            <span>New Workspace</span>
+          </button>
+        </div>
+
+        {/* Pending Workspace Invitations Banner */}
         {userInvites.length > 0 && (
-          <div className="mb-8 p-6 rounded-3xl glass-panel bg-cyan-950/20 border border-cyan-500/40 shadow-glow-cyan">
-            <div className="flex items-center space-x-2.5 mb-4">
-              <Mail className="w-5 h-5 text-cyan-400 animate-bounce" />
-              <h2 className="text-lg font-extrabold text-white tracking-tight">
-                Pending Workspace Invitations ({userInvites.length})
-              </h2>
+          <div className="p-4 rounded-3xl bg-cyan-950/40 border border-cyan-500/40 space-y-3">
+            <div className="flex items-center space-x-2 text-cyan-300">
+              <UserCheck className="w-5 h-5 text-cyan-400" />
+              <h3 className="text-sm font-extrabold uppercase tracking-wider">Pending Workspace Invitations ({userInvites.length})</h3>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {userInvites.map((inv) => (
-                <div key={inv.id} className="p-4 rounded-2xl bg-canvas-panel/80 border border-canvas-border flex items-center justify-between">
+                <div key={inv.id} className="p-4 rounded-2xl bg-canvas-card border border-canvas-border flex items-center justify-between">
                   <div>
-                    <h3 className="font-bold text-sm text-white">{inv.workspace.name}</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">Role: <span className="text-cyan-300 font-semibold uppercase">{inv.role}</span></p>
+                    <h4 className="font-bold text-sm text-white">{inv.workspace?.name}</h4>
+                    <span className="inline-block mt-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">
+                      Role: {inv.role}
+                    </span>
                   </div>
 
                   <div className="flex items-center space-x-2">
                     <button
                       onClick={() => handleAcceptInvite(inv)}
-                      className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 text-canvas-bg font-extrabold text-xs shadow-glow-cyan hover:scale-105 transition-all"
+                      className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 text-canvas-bg font-extrabold text-xs shadow-glow-cyan"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <Check className="w-3.5 h-3.5" />
                       <span>Accept</span>
                     </button>
                     <button
                       onClick={() => handleDeclineInvite(inv.id)}
-                      className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-rose-400 text-xs font-medium transition-colors"
+                      className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
                     >
-                      <XCircle className="w-3.5 h-3.5" />
-                      <span>Decline</span>
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
@@ -281,134 +342,81 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Top Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight flex items-center gap-2">
-              Workspaces Dashboard
-            </h1>
-            <p className="text-sm text-slate-400 mt-1">Manage your collaborative code projects and live studios</p>
-          </div>
-
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            className="flex items-center space-x-2 px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-canvas-bg font-extrabold text-sm shadow-glow-cyan transition-all hover:scale-105"
-          >
-            <Plus className="w-5 h-5" />
-            <span>Create Workspace</span>
-          </button>
+        {/* Search Input Filter */}
+        <div className="relative max-w-md">
+          <Search className="w-4 h-4 text-slate-400 absolute left-4 top-3.5" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search workspaces by name..."
+            className="w-full pl-11 pr-4 py-2.5 rounded-2xl glass-input text-xs text-white"
+          />
         </div>
 
-        {/* Filter Controls & Search */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-8">
-          {/* Search Input */}
-          <div className="relative w-full sm:w-80">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search workspaces..."
-              className="w-full pl-10 pr-4 py-2 rounded-xl glass-input text-xs text-white"
-            />
-          </div>
-
-          {/* Filter Tabs */}
-          <div className="flex items-center space-x-1 bg-canvas-panel p-1 rounded-xl border border-canvas-border w-full sm:w-auto">
-            {['ALL', 'OWNED', 'SHARED'].map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setRoleFilter(tab)}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all ${
-                  roleFilter === tab
-                    ? 'bg-brand-primary text-canvas-bg font-bold shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {tab === 'SHARED' ? 'Shared with me' : tab}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Workspaces Grid */}
+        {/* Workspace Cards Grid */}
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-44 glass-panel rounded-2xl animate-pulse bg-canvas-panel/50 border border-canvas-border" />
-            ))}
+          <div className="py-20 text-center text-slate-400">
+            <Sparkles className="w-8 h-8 text-brand-primary animate-spin mx-auto mb-3" />
+            <p className="text-sm font-semibold">Loading workspaces...</p>
           </div>
         ) : filteredWorkspaces.length === 0 ? (
-          <div className="text-center py-16 glass-panel rounded-3xl border border-canvas-border max-w-lg mx-auto">
-            <FolderCode className="w-12 h-12 text-slate-600 mx-auto mb-3 animate-bounce" />
-            <h3 className="text-lg font-bold text-white mb-1">No Workspaces Found</h3>
-            <p className="text-xs text-slate-400 mb-6">Create your first workspace to start real-time pair programming.</p>
+          <div className="py-16 text-center bg-canvas-panel/50 border border-canvas-border rounded-3xl p-8 space-y-4">
+            <FolderPlus className="w-12 h-12 text-slate-600 mx-auto" />
+            <h3 className="text-lg font-bold text-white">No Workspaces Found</h3>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">Create a new workspace to start pair-programming with your team.</p>
             <button
               onClick={() => setIsCreateOpen(true)}
-              className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-brand-primary text-canvas-bg font-extrabold text-xs shadow-glow-cyan"
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 text-canvas-bg font-extrabold text-xs shadow-glow-cyan"
             >
-              <Plus className="w-4 h-4" />
-              <span>New Workspace</span>
+              Create First Workspace
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredWorkspaces.map((ws) => (
               <div
                 key={ws.id}
                 onClick={() => navigate(`/workspace/${ws.id}`)}
-                className="group glass-panel bg-canvas-panel/60 hover:bg-canvas-panel border border-canvas-border hover:border-cyan-500/40 rounded-2xl p-6 transition-all duration-200 cursor-pointer flex flex-col justify-between hover:shadow-glow-cyan"
+                className="group p-6 rounded-3xl bg-canvas-panel border border-canvas-border hover:border-cyan-500/50 transition-all duration-300 cursor-pointer shadow-sm hover:shadow-glow-cyan flex flex-col justify-between"
               >
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-brand-primary group-hover:scale-105 transition-transform">
-                      <FolderCode className="w-5 h-5" />
-                    </div>
-
-                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
-                      ws.role === 'OWNER'
-                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
-                        : ws.role === 'EDITOR'
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                      ws.role === 'OWNER' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     }`}>
                       {ws.role}
                     </span>
-                  </div>
-
-                  <h3 className="text-lg font-bold text-white group-hover:text-cyan-300 transition-colors line-clamp-1">
-                    {ws.name}
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1 line-clamp-2 min-h-[32px]">
-                    {ws.description || 'No description provided.'}
-                  </p>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-canvas-border flex items-center justify-between text-xs text-slate-500">
-                  <div className="flex items-center space-x-1">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{new Date(ws.created_at || Date.now()).toLocaleDateString()}</span>
-                  </div>
-
-                  <div className="flex items-center space-x-1">
-                    <Link
-                      to={`/workspace/${ws.id}/settings`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-                      title="Settings"
-                    >
-                      <Settings className="w-3.5 h-3.5" />
-                    </Link>
 
                     {ws.role === 'OWNER' && (
                       <button
-                        onClick={(e) => handleDeleteWorkspace(ws.id, ws.name, e)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-brand-coral hover:bg-rose-500/10"
-                        title="Delete"
+                        onClick={(e) => handleDeleteWorkspace(ws.id, e)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-brand-coral hover:bg-rose-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                        title="Delete Workspace"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     )}
+                  </div>
+
+                  <h3 className="text-lg font-bold text-white group-hover:text-cyan-300 transition-colors truncate">
+                    {ws.name}
+                  </h3>
+
+                  <p className="text-xs text-slate-400 line-clamp-2 min-h-[32px]">
+                    {ws.description || 'Live pair programming studio'}
+                  </p>
+                </div>
+
+                <div className="pt-4 mt-4 border-t border-canvas-border flex items-center justify-between text-xs text-slate-400">
+                  <div className="flex items-center space-x-1 text-[11px]">
+                    <Clock className="w-3.5 h-3.5 text-slate-500" />
+                    <span>{new Date(ws.created_at || Date.now()).toLocaleDateString()}</span>
+                  </div>
+
+                  <div className="flex items-center space-x-1 text-brand-primary font-semibold group-hover:translate-x-1 transition-transform">
+                    <span>Open Studio</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
                   </div>
                 </div>
               </div>
@@ -418,7 +426,7 @@ export default function DashboardPage() {
       </main>
 
       {/* Create Workspace Modal */}
-      <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create New Workspace">
+      <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create Workspace">
         <form onSubmit={handleCreateWorkspace} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">Workspace Name</label>
@@ -426,10 +434,9 @@ export default function DashboardPage() {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. E-Commerce Frontend Studio"
+              placeholder="e.g. E-Commerce Storefront"
               className="w-full px-4 py-2.5 rounded-xl glass-input text-sm text-white"
               required
-              autoFocus
             />
           </div>
 
@@ -438,9 +445,9 @@ export default function DashboardPage() {
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief summary of what your team will build..."
+              placeholder="Brief overview of project goals..."
               rows={3}
-              className="w-full px-4 py-2.5 rounded-xl glass-input text-sm text-white"
+              className="w-full px-4 py-2.5 rounded-xl glass-input text-sm text-white resize-none"
             />
           </div>
 
@@ -448,7 +455,7 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => setIsCreateOpen(false)}
-              className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold"
+              className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white"
             >
               Cancel
             </button>
@@ -457,7 +464,7 @@ export default function DashboardPage() {
               disabled={creating}
               className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-500 text-canvas-bg font-extrabold text-xs shadow-glow-cyan disabled:opacity-50"
             >
-              {creating ? 'Creating...' : 'Create & Launch'}
+              {creating ? 'Creating...' : 'Create Workspace'}
             </button>
           </div>
         </form>
