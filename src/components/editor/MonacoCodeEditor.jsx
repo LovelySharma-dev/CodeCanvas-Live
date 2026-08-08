@@ -4,6 +4,95 @@ import { X, Save, CheckCircle2, Lock, FileCode, Code, FileText, Sparkles } from 
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { registerJellyfishTheme } from './jellyfishTheme';
 
+/**
+ * Custom Yjs Y.Text Monaco Binding Adapter
+ * Character-by-character real-time CRDT synchronization
+ */
+class YjsMonacoBinding {
+  constructor(yText, monacoModel) {
+    this.yText = yText;
+    this.monacoModel = monacoModel;
+    this.isApplying = false;
+
+    // 1. Listen for remote Y.Text CRDT delta operations from peers
+    this.yTextObserver = (event) => {
+      if (this.isApplying) return;
+      this.isApplying = true;
+      try {
+        let index = 0;
+        event.delta.forEach((op) => {
+          if (op.retain) {
+            index += op.retain;
+          } else if (op.insert) {
+            const textToInsert = typeof op.insert === 'string' ? op.insert : String(op.insert);
+            const pos = this.monacoModel.getPositionAt(index);
+            const range = {
+              startLineNumber: pos.lineNumber,
+              startColumn: pos.column,
+              endLineNumber: pos.lineNumber,
+              endColumn: pos.column
+            };
+            this.monacoModel.applyEdits([{ range, text: textToInsert, forceMoveMarkers: true }]);
+            index += textToInsert.length;
+          } else if (op.delete) {
+            const startPos = this.monacoModel.getPositionAt(index);
+            const endPos = this.monacoModel.getPositionAt(index + op.delete);
+            const range = {
+              startLineNumber: startPos.lineNumber,
+              startColumn: startPos.column,
+              endLineNumber: endPos.lineNumber,
+              endColumn: endPos.column
+            };
+            this.monacoModel.applyEdits([{ range, text: '', forceMoveMarkers: true }]);
+          }
+        });
+      } catch (err) {
+        console.warn('YjsMonacoBinding delta apply warning:', err);
+      } finally {
+        this.isApplying = false;
+      }
+    };
+
+    this.yText.observe(this.yTextObserver);
+
+    // 2. Listen for local typing content changes in Monaco
+    this.monacoListener = this.monacoModel.onDidChangeContent((event) => {
+      if (this.isApplying) return;
+      this.isApplying = true;
+      try {
+        this.yText.doc.transact(() => {
+          const sortedChanges = [...event.changes].sort((a, b) => b.rangeOffset - a.rangeOffset);
+          sortedChanges.forEach((change) => {
+            if (change.rangeLength > 0) {
+              this.yText.delete(change.rangeOffset, change.rangeLength);
+            }
+            if (change.text.length > 0) {
+              this.yText.insert(change.rangeOffset, change.text);
+            }
+          });
+        });
+      } catch (err) {
+        console.warn('YjsMonacoBinding Y.Text edit warning:', err);
+      } finally {
+        this.isApplying = false;
+      }
+    });
+  }
+
+  destroy() {
+    if (this.yTextObserver) {
+      try {
+        this.yText.unobserve(this.yTextObserver);
+      } catch (e) {}
+    }
+    if (this.monacoListener) {
+      try {
+        this.monacoListener.dispose();
+      } catch (e) {}
+    }
+  }
+}
+
 export default function MonacoCodeEditor() {
   const {
     files,
@@ -22,7 +111,7 @@ export default function MonacoCodeEditor() {
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
   const cursorListenerRef = useRef(null);
-  const isRemoteEditRef = useRef(false);
+  const bindingRef = useRef(null);
 
   const isReadOnly = userRole === 'VIEWER';
 
@@ -50,12 +139,7 @@ export default function MonacoCodeEditor() {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
-    // Set initial value
-    if (activeFile && activeFile.content !== undefined) {
-      editor.setValue(activeFile.content);
-    }
-
-    // Dispose any previous listener before attaching a new cursor listener
+    // Attach cursor position listener
     cursorListenerRef.current?.dispose();
     cursorListenerRef.current = editor.onDidChangeCursorPosition((e) => {
       if (realtimeChannel && activeFileId) {
@@ -67,37 +151,54 @@ export default function MonacoCodeEditor() {
     });
   };
 
-  // Sync Monaco Editor internal model reactively whenever activeFile.content changes from another peer
+  // Bind Monaco Editor directly to Yjs Y.Text document for CRDT character-by-character real-time sync
   useEffect(() => {
-    if (editorRef.current && activeFile) {
-      const currentEditorValue = editorRef.current.getValue();
-      if (activeFile.content !== undefined && activeFile.content !== currentEditorValue) {
-        isRemoteEditRef.current = true;
-        const position = editorRef.current.getPosition();
-        editorRef.current.setValue(activeFile.content);
-        if (position) {
-          editorRef.current.setPosition(position);
-        }
-        isRemoteEditRef.current = false;
-      }
-    }
-  }, [activeFile?.content, activeFileId]);
+    if (!editorRef.current || !activeFileId || !realtimeChannel?.doc) return;
 
-  // Dispose Monaco cursor listener on unmount
+    const ydoc = realtimeChannel.doc;
+    const yText = ydoc.getText(`file-${activeFileId}`);
+
+    // Populate initial content in Y.Text if empty
+    if (yText.toString() === '' && activeFile?.content) {
+      yText.insert(0, activeFile.content);
+    }
+
+    try {
+      bindingRef.current?.destroy();
+
+      const model = editorRef.current.getModel();
+      if (model) {
+        const binding = new YjsMonacoBinding(yText, model);
+        bindingRef.current = binding;
+      }
+
+      // Sync activeFile state in WorkspaceContext to trigger LivePreview reactive hot-reload
+      const handleYTextChange = () => {
+        const updatedText = yText.toString();
+        setSaveState('saving');
+        updateFileContent(activeFileId, updatedText);
+        setTimeout(() => setSaveState('saved'), 300);
+      };
+
+      yText.observe(handleYTextChange);
+
+      return () => {
+        yText.unobserve(handleYTextChange);
+        bindingRef.current?.destroy();
+        bindingRef.current = null;
+      };
+    } catch (err) {
+      console.warn('Monaco Yjs binding warning:', err);
+    }
+  }, [activeFileId, realtimeChannel?.doc]);
+
+  // Dispose Monaco listeners on unmount
   useEffect(() => {
     return () => {
       cursorListenerRef.current?.dispose();
+      bindingRef.current?.destroy();
     };
   }, []);
-
-  const handleEditorChange = (value) => {
-    if (isReadOnly || !activeFileId || isRemoteEditRef.current) return;
-    setSaveState('saving');
-    updateFileContent(activeFileId, value || '');
-    setTimeout(() => {
-      setSaveState('saved');
-    }, 300);
-  };
 
   return (
     <div className="flex-1 flex flex-col h-full bg-canvas-panel overflow-hidden">
@@ -142,12 +243,12 @@ export default function MonacoCodeEditor() {
             {saveState === 'saving' ? (
               <>
                 <Save className="w-3.5 h-3.5 text-brand-sky animate-spin" />
-                <span className="hidden sm:inline text-brand-sky">Syncing...</span>
+                <span className="hidden sm:inline text-brand-sky">CRDT Syncing...</span>
               </>
             ) : (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-brand-emerald" />
-                <span className="hidden sm:inline text-slate-400">Live Sync</span>
+                <span className="hidden sm:inline text-slate-400">Yjs Live Sync</span>
               </>
             )}
           </div>
@@ -173,10 +274,9 @@ export default function MonacoCodeEditor() {
           <Editor
             height="100%"
             language={getLanguage(activeFile.name)}
-            value={activeFile.content || ''}
+            defaultValue={activeFile.content || ''}
             theme={editorTheme}
             beforeMount={handleBeforeMount}
-            onChange={handleEditorChange}
             onMount={handleEditorDidMount}
             options={{
               readOnly: isReadOnly,

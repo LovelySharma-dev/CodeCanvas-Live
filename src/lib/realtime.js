@@ -23,7 +23,7 @@ export function getRandomColor(userId) {
 }
 
 /**
- * Unified Realtime Broadcast & WebRTC Signaling Channel
+ * Unified Realtime Yjs CRDT Broadcast & WebRTC Signaling Channel
  * Room standard: workspace:${workspaceId}
  * Yjs Doc standard: workspace-doc:${workspaceId}
  */
@@ -56,6 +56,16 @@ export class WorkspaceRealtimeChannel {
         lastSeen: Date.now()
       });
     }
+
+    // Attach Yjs CRDT Document update listener
+    this.doc.on('update', (update, origin) => {
+      if (origin !== 'remote' && !this.isClosed) {
+        // Broadcast Yjs state update vector to peers
+        this.sendBroadcast('YJS_UPDATE', {
+          update: Array.from(update)
+        });
+      }
+    });
 
     this.connect();
   }
@@ -95,8 +105,9 @@ export class WorkspaceRealtimeChannel {
       console.warn('InsForge WebSocket channel connection:', err);
     }
 
-    // Announce presence on connect
+    // Announce presence and request full Yjs sync state on connect
     this.broadcastPresence();
+    this.sendBroadcast('YJS_SYNC_REQUEST', { userId: this.user?.id });
   }
 
   on(event, handler) {
@@ -132,7 +143,7 @@ export class WorkspaceRealtimeChannel {
       }
     }
 
-    // Broadcast via InsForge WebSocket Channel (other remote clients)
+    // Broadcast via InsForge WebSocket Channel (remote clients)
     if (this.insforgeChannel && typeof this.insforgeChannel.send === 'function') {
       try {
         this.insforgeChannel.send({
@@ -190,9 +201,20 @@ export class WorkspaceRealtimeChannel {
     if (!msg || this.isClosed) return;
 
     if (msg.type === 'broadcast' && msg.event) {
-      // Ignore self-echoes from WebSocket
-      if (msg.senderId && msg.senderId === this.user?.id) {
-        // Return if it came from WebSocket back to sender
+      // Apply Yjs CRDT state update from peer
+      if (msg.event === 'YJS_UPDATE' && msg.payload?.update) {
+        try {
+          const updateArray = new Uint8Array(msg.payload.update);
+          Y.applyUpdate(this.doc, updateArray, 'remote');
+        } catch (err) {
+          console.warn('Error applying Yjs update:', err);
+        }
+      } else if (msg.event === 'YJS_SYNC_REQUEST' && msg.senderId !== this.user?.id) {
+        // Send full Yjs state vector to newly connected peer
+        try {
+          const fullState = Y.encodeStateAsUpdate(this.doc);
+          this.sendBroadcast('YJS_UPDATE', { update: Array.from(fullState) });
+        } catch (err) {}
       }
 
       const handlers = this.eventListeners.get(msg.event);
