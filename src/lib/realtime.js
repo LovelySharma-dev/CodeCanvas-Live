@@ -60,7 +60,6 @@ export class WorkspaceRealtimeChannel {
     // Attach Yjs CRDT Document update listener
     this.doc.on('update', (update, origin) => {
       if (origin !== 'remote' && !this.isClosed) {
-        // Broadcast Yjs state update vector to peers
         this.sendBroadcast('YJS_UPDATE', {
           update: Array.from(update)
         });
@@ -81,7 +80,20 @@ export class WorkspaceRealtimeChannel {
       console.warn('BroadcastChannel fallback:', err);
     }
 
-    // 2. Setup InsForge Realtime WebSocket Channel
+    // 2. Setup LocalStorage event listener for cross-window sync
+    this.storageListener = (e) => {
+      if (e.key === `codecanvas_rt_${this.workspaceId}` && e.newValue) {
+        try {
+          const msg = JSON.parse(e.newValue);
+          if (msg && msg.senderId !== this.user?.id) {
+            this.handleMessage(msg);
+          }
+        } catch (err) {}
+      }
+    };
+    window.addEventListener('storage', this.storageListener);
+
+    // 3. Setup InsForge Realtime WebSocket Channel
     try {
       if (insforge && typeof insforge.channel === 'function') {
         this.insforgeChannel = insforge.channel(this.channelName, {
@@ -134,16 +146,19 @@ export class WorkspaceRealtimeChannel {
       timestamp: Date.now()
     };
 
-    // Broadcast via BroadcastChannel (other local tabs)
+    // 1. Broadcast via BroadcastChannel
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage(msg);
-      } catch (err) {
-        console.warn('BroadcastChannel post error:', err);
-      }
+      } catch (err) {}
     }
 
-    // Broadcast via InsForge WebSocket Channel (remote clients)
+    // 2. Broadcast via LocalStorage event hub
+    try {
+      localStorage.setItem(`codecanvas_rt_${this.workspaceId}`, JSON.stringify(msg));
+    } catch (e) {}
+
+    // 3. Broadcast via InsForge WebSocket Channel
     if (this.insforgeChannel && typeof this.insforgeChannel.send === 'function') {
       try {
         this.insforgeChannel.send({
@@ -152,20 +167,16 @@ export class WorkspaceRealtimeChannel {
           payload,
           senderId: this.user?.id
         });
-      } catch (err) {
-        console.warn('InsForge WebSocket broadcast error:', err);
-      }
+      } catch (err) {}
     }
 
-    // Invoke local handlers on sending instance
+    // 4. Local Handlers
     const handlers = this.eventListeners.get(event);
     if (handlers) {
       handlers.forEach(fn => {
         try {
           fn({ payload, senderId: this.user?.id });
-        } catch (e) {
-          console.error('Error in local broadcast listener:', e);
-        }
+        } catch (e) {}
       });
     }
   }
@@ -206,11 +217,8 @@ export class WorkspaceRealtimeChannel {
         try {
           const updateArray = new Uint8Array(msg.payload.update);
           Y.applyUpdate(this.doc, updateArray, 'remote');
-        } catch (err) {
-          console.warn('Error applying Yjs update:', err);
-        }
+        } catch (err) {}
       } else if (msg.event === 'YJS_SYNC_REQUEST' && msg.senderId !== this.user?.id) {
-        // Send full Yjs state vector to newly connected peer
         try {
           const fullState = Y.encodeStateAsUpdate(this.doc);
           this.sendBroadcast('YJS_UPDATE', { update: Array.from(fullState) });
@@ -222,9 +230,7 @@ export class WorkspaceRealtimeChannel {
         handlers.forEach(fn => {
           try {
             fn({ payload: msg.payload, senderId: msg.senderId });
-          } catch (e) {
-            console.error('Error handling realtime event:', e);
-          }
+          } catch (e) {}
         });
       }
 
@@ -249,14 +255,15 @@ export class WorkspaceRealtimeChannel {
     this.subscribers.forEach(cb => {
       try {
         cb(data);
-      } catch (e) {
-        console.error('Error notifying subscriber:', e);
-      }
+      } catch (e) {}
     });
   }
 
   destroy() {
     this.isClosed = true;
+    if (this.storageListener) {
+      window.removeEventListener('storage', this.storageListener);
+    }
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.close();
