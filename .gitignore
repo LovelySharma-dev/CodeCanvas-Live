@@ -1,4 +1,3 @@
-
 # InsForge & AI agent skills
 .insforge
 .agent
@@ -13,3 +12,47 @@
 .roo
 .trae
 .windsurf
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/
+
+# Production builds
+dist/
+dist-ssr/
+build/
+*.local
+
+# Environment variables & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor & IDE configs
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

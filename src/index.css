@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-canvas-bg text-slate-100 antialiased selection:bg-cyan-500/30 selection:text-cyan-200 overflow-x-hidden;
+  }
+}
+
+/* Glassmorphism Panel Container */
+.glass-panel {
+  @apply bg-canvas-panel/80 backdrop-blur-md border border-canvas-border shadow-glass;
+}
+
+.glass-card {
+  @apply bg-canvas-card/60 backdrop-blur-sm border border-slate-800 hover:border-slate-700 transition-all duration-200;
+}
+
+.glass-input {
+  @apply bg-canvas-bg/80 border border-canvas-border text-slate-100 placeholder-slate-500 focus:border-brand-primary focus:ring-1 focus:ring-brand-primary/50 outline-none transition-all;
+}
+
+/* Animated gradient text (Cyan to Sky Blue to Emerald) */
+.gradient-text {
+  background: linear-gradient(135deg, #00E5FF 0%, #38BDF8 50%, #10B981 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Slick Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #070A12;
+}
+::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Caret indicator labels in Monaco */
+.remote-caret-flag {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  font-size: 10px;
+  font-family: sans-serif;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: white;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+}
