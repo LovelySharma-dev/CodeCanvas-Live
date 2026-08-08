@@ -14,16 +14,33 @@ export function AuthProvider({ children }) {
   }, []);
 
   const syncUserRecord = async (authUser) => {
-    if (!authUser || !authUser.id) return;
+    if (!authUser || !authUser.id || !authUser.email) return;
     try {
+      // 1. Check if user already exists by ID
+      const { data: existingId } = await insforge.database
+        .from('users')
+        .select('id')
+        .eq('id', authUser.id);
+
+      if (existingId && existingId.length > 0) return;
+
+      // 2. Check if user already exists by Email
+      const { data: existingEmail } = await insforge.database
+        .from('users')
+        .select('id')
+        .eq('email', authUser.email.toLowerCase());
+
+      if (existingEmail && existingEmail.length > 0) return;
+
+      // 3. Insert user record safely
       await insforge.database.from('users').insert([{
         id: authUser.id,
-        email: authUser.email,
+        email: authUser.email.toLowerCase(),
         full_name: authUser.user_metadata?.full_name || authUser.full_name || authUser.name || authUser.email.split('@')[0],
         avatar_url: authUser.user_metadata?.avatar_url || authUser.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${authUser.id}`
       }]);
     } catch (err) {
-      // Ignore if user row already exists
+      // Suppress any duplicate key warning
     }
   };
 
@@ -63,7 +80,7 @@ export function AuthProvider({ children }) {
       
       const authenticatedUser = res.data?.user || res.user || {
         id: generateUUID(),
-        email: email,
+        email: email.toLowerCase(),
         full_name: email.split('@')[0],
         avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`
       };
@@ -76,7 +93,7 @@ export function AuthProvider({ children }) {
       if (email && password) {
         const fallbackUser = {
           id: generateUUID(),
-          email: email,
+          email: email.toLowerCase(),
           full_name: email.split('@')[0],
           avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`
         };
@@ -96,7 +113,7 @@ export function AuthProvider({ children }) {
     setError(null);
     try {
       const res = await insforge.auth.signUp({
-        email,
+        email: email.toLowerCase(),
         password,
         options: {
           data: { full_name: fullName }
@@ -105,7 +122,7 @@ export function AuthProvider({ children }) {
 
       const newUser = res.data?.user || res.user || {
         id: generateUUID(),
-        email: email,
+        email: email.toLowerCase(),
         full_name: fullName,
         avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`
       };
@@ -118,7 +135,7 @@ export function AuthProvider({ children }) {
       if (email && fullName) {
         const fallbackUser = {
           id: generateUUID(),
-          email: email,
+          email: email.toLowerCase(),
           full_name: fullName,
           avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`
         };

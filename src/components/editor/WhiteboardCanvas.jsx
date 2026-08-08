@@ -116,21 +116,59 @@ export default function WhiteboardCanvas() {
 
   // Subscribe to real-time WHITEBOARD_DRAW broadcast updates on room workspace:${workspaceId}
   useEffect(() => {
-    if (!realtimeChannel) return;
-
-    const unsubscribe = realtimeChannel.on('WHITEBOARD_DRAW', ({ payload }) => {
-      if (payload && payload.shapes) {
-        setShapes(payload.shapes);
+    // 1. Storage event listener for multi-window / multi-tab synchronization
+    const handleStorage = (e) => {
+      if (e.key === `codecanvas_wb_${workspaceId}` && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && parsed.shapes) {
+            setShapes(parsed.shapes);
+          }
+        } catch (err) {}
       }
-    });
+    };
+    window.addEventListener('storage', handleStorage);
 
-    return () => unsubscribe();
-  }, [realtimeChannel]);
+    // Initial load from storage if available
+    try {
+      const saved = localStorage.getItem(`codecanvas_wb_${workspaceId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.shapes?.length > 0) {
+          setShapes(parsed.shapes);
+        }
+      }
+    } catch (e) {}
+
+    // 2. Realtime WebSocket Channel listener
+    let unsubscribe = () => {};
+    if (realtimeChannel) {
+      unsubscribe = realtimeChannel.on('WHITEBOARD_DRAW', ({ payload }) => {
+        if (payload && payload.shapes) {
+          setShapes(payload.shapes);
+        }
+      });
+    }
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      unsubscribe();
+    };
+  }, [realtimeChannel, workspaceId]);
 
   const broadcastWhiteboardUpdate = (updatedShapes) => {
+    setShapes(updatedShapes);
+
     if (realtimeChannel && !realtimeChannel.isClosed) {
       realtimeChannel.sendBroadcast('WHITEBOARD_DRAW', { shapes: updatedShapes });
     }
+
+    try {
+      localStorage.setItem(`codecanvas_wb_${workspaceId}`, JSON.stringify({
+        shapes: updatedShapes,
+        ts: Date.now()
+      }));
+    } catch (e) {}
   };
 
   // Mouse Handlers
@@ -219,7 +257,6 @@ export default function WhiteboardCanvas() {
 
     if (newShape) {
       const updated = [...shapes, newShape];
-      setShapes(updated);
       broadcastWhiteboardUpdate(updated);
     }
     setCurrentPath([]);
@@ -239,7 +276,6 @@ export default function WhiteboardCanvas() {
     };
 
     const updated = [...shapes, newShape];
-    setShapes(updated);
     broadcastWhiteboardUpdate(updated);
     setTextInput('');
     setTextPos(null);
@@ -247,7 +283,6 @@ export default function WhiteboardCanvas() {
 
   const handleClearCanvas = () => {
     if (confirm('Clear entire collaborative whiteboard?')) {
-      setShapes([]);
       broadcastWhiteboardUpdate([]);
     }
   };

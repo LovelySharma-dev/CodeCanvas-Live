@@ -25,7 +25,7 @@ const ICE_SERVERS = {
 export default function VideoCall({ isOpen, onClose }) {
   const { user } = useAuth();
   const { workspaceId: paramWorkspaceId } = useParams();
-  const { workspaceId: contextWorkspaceId, realtimeChannel } = useWorkspace();
+  const { workspaceId: contextWorkspaceId, realtimeChannel, presenceUsers } = useWorkspace();
   const workspaceId = paramWorkspaceId || contextWorkspaceId;
 
   const [inCall, setInCall] = useState(false);
@@ -39,7 +39,7 @@ export default function VideoCall({ isOpen, onClose }) {
   const localVideoRef = useRef(null);
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
-  const peerConnectionsRef = useRef(new Map()); // userId -> RTCPeerConnection
+  const peerConnectionsRef = useRef(new Map());
 
   // Helper to create RTCPeerConnection for a remote peer
   const createPeerConnection = (targetUserId) => {
@@ -50,14 +50,12 @@ export default function VideoCall({ isOpen, onClose }) {
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionsRef.current.set(targetUserId, pc);
 
-    // Add local media tracks to peer connection
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
         pc.addTrack(track, localStreamRef.current);
       });
     }
 
-    // ICE Candidate handler
     pc.onicecandidate = (e) => {
       if (e.candidate && realtimeChannel && !realtimeChannel.isClosed) {
         realtimeChannel.sendBroadcast('WEBRTC_SIGNAL', {
@@ -69,7 +67,6 @@ export default function VideoCall({ isOpen, onClose }) {
       }
     };
 
-    // Remote Track received handler
     pc.ontrack = (e) => {
       if (e.streams && e.streams[0]) {
         const stream = e.streams[0];
@@ -92,7 +89,6 @@ export default function VideoCall({ isOpen, onClose }) {
 
       const { type, userId, targetId, offer, answer, candidate } = payload;
 
-      // 1. USER_JOINED_VIDEO: Initiated by new joining peer
       if (type === 'USER_JOINED_VIDEO' || type === 'JOIN_ROOM') {
         const pc = createPeerConnection(senderId);
         try {
@@ -107,10 +103,7 @@ export default function VideoCall({ isOpen, onClose }) {
         } catch (err) {
           console.warn('Error creating WebRTC offer:', err);
         }
-      }
-
-      // 2. WEBRTC_OFFER: Received by targeted peer
-      else if (type === 'WEBRTC_OFFER' && targetId === user.id) {
+      } else if (type === 'WEBRTC_OFFER' && targetId === user.id) {
         const pc = createPeerConnection(senderId);
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
@@ -125,10 +118,7 @@ export default function VideoCall({ isOpen, onClose }) {
         } catch (err) {
           console.warn('Error handling WebRTC offer:', err);
         }
-      }
-
-      // 3. WEBRTC_ANSWER: Received by offer sender
-      else if (type === 'WEBRTC_ANSWER' && targetId === user.id) {
+      } else if (type === 'WEBRTC_ANSWER' && targetId === user.id) {
         const pc = peerConnectionsRef.current.get(senderId);
         if (pc) {
           try {
@@ -137,10 +127,7 @@ export default function VideoCall({ isOpen, onClose }) {
             console.warn('Error setting WebRTC answer:', err);
           }
         }
-      }
-
-      // 4. ICE_CANDIDATE: Exchanged candidates
-      else if (type === 'ICE_CANDIDATE' && targetId === user.id) {
+      } else if (type === 'ICE_CANDIDATE' && targetId === user.id) {
         const pc = peerConnectionsRef.current.get(senderId);
         if (pc && candidate) {
           try {
@@ -169,7 +156,6 @@ export default function VideoCall({ isOpen, onClose }) {
       }
       setInCall(true);
 
-      // Broadcast USER_JOINED_VIDEO signal over room workspace:${workspaceId}
       if (realtimeChannel && !realtimeChannel.isClosed) {
         realtimeChannel.sendBroadcast('WEBRTC_SIGNAL', {
           type: 'USER_JOINED_VIDEO',
@@ -190,8 +176,14 @@ export default function VideoCall({ isOpen, onClose }) {
           });
         }
       } catch (audioErr) {
-        setStreamError('Could not access camera/microphone. Check permissions.');
+        setIsVideoOff(true);
         setInCall(true);
+        if (realtimeChannel && !realtimeChannel.isClosed) {
+          realtimeChannel.sendBroadcast('WEBRTC_SIGNAL', {
+            type: 'USER_JOINED_VIDEO',
+            userId: user?.id
+          });
+        }
       }
     }
   };
@@ -274,6 +266,9 @@ export default function VideoCall({ isOpen, onClose }) {
 
   if (!isOpen) return null;
 
+  // Active presence collaborators excluding local user
+  const otherCollaborators = (presenceUsers || []).filter(u => u.id !== user?.id);
+
   return (
     <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ${
       isMinimized ? 'w-64 h-14' : 'w-[440px] h-[480px]'
@@ -285,7 +280,7 @@ export default function VideoCall({ isOpen, onClose }) {
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
           <span className="font-bold text-xs text-white">Live WebRTC Video Room</span>
           <span className="text-[10px] text-cyan-300 font-mono px-2 py-0.5 rounded bg-cyan-500/20">
-            {remotePeers.length + (inCall ? 1 : 0)} Active
+            {Math.max(remotePeers.length, otherCollaborators.length) + (inCall ? 1 : 0)} Active
           </span>
         </div>
 
@@ -337,27 +332,44 @@ export default function VideoCall({ isOpen, onClose }) {
 
                   <div className="absolute bottom-2 left-2 flex items-center space-x-1 bg-canvas-panel/90 px-2 py-0.5 rounded-full border border-canvas-border text-[10px] text-white backdrop-blur-md">
                     <Volume2 className="w-3 h-3 text-cyan-400" />
-                    <span className="font-semibold">{user?.full_name || 'You'}</span>
+                    <span className="font-semibold">{user?.full_name || 'You'} (Host)</span>
                   </div>
                 </div>
 
-                {/* Remote Peers Video Frames */}
-                {remotePeers.map((peer) => (
-                  <div key={peer.id} className="relative w-full h-full min-h-[160px] rounded-xl overflow-hidden bg-slate-900 border border-emerald-500/40">
-                    <video
-                      ref={el => {
-                        if (el && peer.stream) el.srcObject = peer.stream;
-                      }}
-                      autoPlay
-                      playsInline
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute bottom-2 left-2 flex items-center space-x-1 bg-canvas-panel/90 px-2 py-0.5 rounded-full border border-canvas-border text-[10px] text-white backdrop-blur-md">
-                      <Volume2 className="w-3 h-3 text-emerald-400" />
-                      <span className="font-semibold">Collaborator</span>
+                {/* Remote Peers Video Streams or Collaborator Cards */}
+                {remotePeers.length > 0 ? (
+                  remotePeers.map((peer) => (
+                    <div key={peer.id} className="relative w-full h-full min-h-[160px] rounded-xl overflow-hidden bg-slate-900 border border-emerald-500/40">
+                      <video
+                        ref={el => {
+                          if (el && peer.stream) el.srcObject = peer.stream;
+                        }}
+                        autoPlay
+                        playsInline
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute bottom-2 left-2 flex items-center space-x-1 bg-canvas-panel/90 px-2 py-0.5 rounded-full border border-canvas-border text-[10px] text-white backdrop-blur-md">
+                        <Volume2 className="w-3 h-3 text-emerald-400" />
+                        <span className="font-semibold">Collaborator</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  otherCollaborators.map((c) => (
+                    <div key={c.id} className="relative w-full h-full min-h-[160px] rounded-xl overflow-hidden bg-slate-900 border border-emerald-500/40 flex flex-col items-center justify-center p-2 text-center">
+                      <img
+                        src={c.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${c.id}`}
+                        alt={c.name}
+                        className="w-12 h-12 rounded-xl bg-slate-800 ring-2 ring-emerald-500/40 mb-1"
+                      />
+                      <span className="font-bold text-xs text-white truncate max-w-[100px]">{c.name}</span>
+                      <div className="absolute bottom-2 left-2 flex items-center space-x-1 bg-canvas-panel/90 px-2 py-0.5 rounded-full border border-canvas-border text-[10px] text-white backdrop-blur-md">
+                        <Volume2 className="w-3 h-3 text-emerald-400" />
+                        <span className="font-semibold">Connected</span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </>
             ) : (
               <div className="col-span-2 text-center p-6 space-y-3 flex flex-col items-center justify-center h-full">
